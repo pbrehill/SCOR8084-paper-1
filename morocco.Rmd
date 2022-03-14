@@ -1,0 +1,419 @@
+---
+title: "Morocco"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(magrittr)
+library(haven)
+library(grf)
+library(car)
+library(pcaMethods)
+library(cowplot)
+library(caret)
+library(stargazer)
+library(lm.beta)
+```
+
+
+```{r}
+maths <- read_dta("LCT Morroco\\cct_aser_an.dta")
+baseline <- read_dta("LCT Morroco\\cct_baseline_an.dta")
+endline <- read_dta("LCT Morroco\\cct_endline_an.dta")
+school_baseline <- read_dta("LCT Morroco\\cct_preliminary_survey_an.dta")
+dropout <- read_dta('LCT Morroco\\cct_school_visits_an.dta')
+admin_data <- read_dta('LCT Morroco\\cct_tayssir_admin_data_an.dta')
+```
+
+```{r}
+dropouts <- dropout %>% 
+  select(ends_with('_c12'))
+
+dropouts1 <- dropouts == 2
+dropouts2 <- rowSums(dropouts1, na.rm = TRUE) # Importantly excluding NAs
+dropouts3 <- dropouts2 > 0
+dropout$any_drops <- dropouts3
+
+```
+
+
+```{r}
+joined <- baseline %>%
+  left_join(endline, by = "hhid", suffix = c("", ".y")) %>%
+  left_join(maths, by = "hhid", suffix = c("", ".y")) %>%
+  left_join(school_baseline, by = "schoolid", suffix = c("", ".y")) %>%
+  select_at(
+    vars(-ends_with(".y"))
+  )
+
+baseline %<>%
+  mutate(schoolunitid = factor(schoolunitid),
+         group1 = car::recode(group, "0 = NA; 1=1; 2:50 = 0"),
+         group2 = car::recode(group, "0 = NA; 1=NA "))
+```
+
+```{r}
+# Get hhh variables
+intermediate <- baseline %>%
+  select(hhid, matches("^a[1-9]")) %>%
+  gather(-hhid, key = "question", value = "value") %>%
+  tidyr::separate(question, c("question", "person", "response"), sep = "_") 
+
+temp <- intermediate %>%
+  filter(question == 'a4' |
+           question == 'a13' |
+           (question == 'a15' & response == 1) |
+           (question == 'a3' & is.na(response))
+           ) %>%
+  select(-response) %>%
+  spread(question, value) %>%
+  filter(a3 == 1) %>%
+  select(hhid, a4, a13, a15)
+```
+
+```{r}
+week_to_month <- function (x) {
+  (x / 7) * 30
+}
+
+year_to_month <- function (x) {
+  x / 12
+}
+
+
+expenditure <- baseline %>%
+  select(starts_with('h1_'),
+         starts_with('h3_'),
+         starts_with('h4_')
+         ) %>%
+  select_if(is.numeric) %>%
+  mutate_at(
+    vars(starts_with('h1_')),
+    week_to_month
+    ) %>%
+  mutate_at(
+    vars(starts_with('h4_')),
+    week_to_month
+    )
+
+expenditure[expenditure < 0] <- 0
+
+baseline$monthly_spending <- rowSums(expenditure, na.rm = TRUE) %>% log()
+
+```
+
+```{r}
+num_kids <- baseline %>%
+  select(hhid, matches("^d1_[0-9]{1,2}")) %>%
+  gather(-hhid, key = "question", value = "value") %>%
+  group_by(hhid) %>%
+  summarise(est_num_kids = sum(value == 1, na.rm = T))
+
+```
+
+https://docs.wfp.org/api/documents/WFP-0000022418/download/ for WI justifications
+
+```{r}
+assets <- baseline %>%
+  select(b10_5, b10_6, b10_20, b10_26,  b10_21, b10_28, b4_1, b5_1, b9_5, monthly_spending) %>%
+  mutate(b4_1 = car::recode(b4_1, "1:3 = 1; 4:5 = 2; -99 = NA"),
+         b5_1 = car::recode(b5_1, "1:3 = 1; 5 = 1; 4 = 2; 6 = 2; -99 = NA"),
+         b9_5 = car::recode(b9_5, "1 = 1; 2 = 2; -99:-1 = NA")
+         )
+
+assets[assets==-99]<-NA
+
+# assets_wo_na <- 
+```
+
+```{r}
+# standard_assets <- assets %>%
+#   map_df(scale)
+#   
+# pca_results <- standard_assets %>%
+#   as.matrix() %>%
+#   bpca(1)
+```
+
+```{r}
+maths_results <- rowSums(maths[c('t6', 't5_1', 't4_1', 't3_1')])
+```
+
+
+```{r}
+joined1 <- baseline[c('hhid', 'group1', 'group2', 'monthly_spending')] %>%
+  left_join(num_kids, by = "hhid") %>%
+  left_join(temp, by = "hhid") %>%
+  filter(!duplicated(hhid))
+
+# joined1$PCA <- pca_results@scores %>% c()
+
+joined1 %<>%
+  left_join(maths, by = "hhid")
+
+# Add endline ID to be able to join to maths data
+joined1 %<>%
+  dplyr::inner_join(endline[c('hhid', 'hhid_endline')], by = 'hhid', suffix = c("", ".y")) %>%
+  inner_join(admin_data[c('hhid_endline', 'stud_id_tayssir', 'datenaiseleve', 'genre_el')], by = 'hhid_endline', suffix = c("", ".y")) %>%
+  inner_join(dropout[c('stud_id_tayssir', 'any_drops')], by = "stud_id_tayssir", suffix = c("", ".y")) %>%
+  select_at(
+    vars(-ends_with(".y"))
+  )
+
+
+# joined2 <- joined1 %>%
+#   left_join(assets, by = "hhid")
+```
+
+
+
+```{r}
+# Get the valid baseline predictors
+joined
+
+```
+
+```{r}
+joined1 <- joined1[c('a4', 'a13', 'est_num_kids', 'monthly_spending', 'any_drops', 'group1', 'a15', 'datenaiseleve', 'genre_el', 'hhid')]
+
+
+ joined_num <- joined1 %>%
+#   mutate(cluster = as.factor(hhid)) %>%
+  mutate(gender = factor(genre_el),
+         birth_date = datenaiseleve %>% as.Date(),
+         hhid = as.factor(hhid)) %>%
+  select(-genre_el, -datenaiseleve) %>%
+  mutate_all(as.numeric) %>%
+  mutate(any_drops = (any_drops - 1) * -1)
+ 
+joined_num[joined_num < 0] <- NA
+joined_num <- joined_num[complete.cases(joined_num),]
+
+covariates <- c('a4', 'a13', 'est_num_kids', 'monthly_spending', 'a15', 'birth_date', 'gender')
+
+X <- joined_num[covariates]
+```
+
+```{r rename variables}
+joined_num
+```
+
+
+## Dropping out
+
+Mention we are not using two-stage selection or other pre-processing, instead relying on manual selection.
+
+```{r}
+# code adapted from Athey et al. (2019)
+
+
+
+cf.raw = causal_forest (X, joined_num$any_drops, joined_num$group1 %>% as.numeric(),
+  Y.hat = NULL , W.hat = 0.69 ,
+  
+  clusters = joined_num$hhid
+  )
+
+tau.hat = predict(cf.raw)$predictions
+joined_num$tau <- tau.hat
+```
+
+```{r}
+qplot(x=tau.hat)
+```
+
+```{r}
+
+ATE = average_treatment_effect ( cf.raw )
+paste ("95% CI for the ATE:", round ( ATE [1] , 3) ,"+/ -", round ( qnorm (0.975) * ATE [2] , 3))
+```
+```{r}
+test_calibration(cf.raw)
+```
+
+```{r}
+variable_importance(cf.raw)
+```
+
+
+Some signs of heterogeneity, let's break it down by different factors.
+
+```{r}
+ggplot(data = NULL, aes(x = joined_num$monthly_spending, y = tau.hat)) +
+  geom_jitter() + 
+  geom_smooth()
+```
+
+```{r}
+ggplot(data = NULL, aes(x = joined_num$a13, y = tau.hat)) +
+  geom_jitter(alpha = 0.1) +
+  geom_smooth()
+```
+
+```{r}
+ggplot(data = NULL, aes(x = joined_num$est_num_kids, y = tau.hat)) +
+  geom_jitter() + 
+  geom_smooth(method="gam", formula = y ~ s(x, bs = "cs", k=5))
+```
+
+```{r}
+outlierdf <- data.frame(monthly_spending = joined_num$monthly_spending, tau = tau.hat)
+
+Q <- quantile(outlierdf$monthly_spending, probs=c(.25, .75), na.rm = FALSE)
+iqr <- IQR(outlierdf$monthly_spending)
+up <-  Q[2]+1.5*iqr # Upper Range  
+low<- Q[1]-1.5*iqr # Lower Range
+eliminated<- subset(outlierdf, outlierdf$monthly_spending > (Q[1] - 1.5*iqr) & outlierdf$monthly_spending < (Q[2]+1.5*iqr))
+
+```
+
+```{r}
+qplot(eliminated$monthly_spending, eliminated$tau) + 
+  # geom_smooth() + 
+  geom_smooth(method='lm', formula= y ~ poly(x, 5)) +
+  geom_smooth(method = 'lm')
+  
+```
+
+```{r}
+spending_model <- lm(tau ~ poly(monthly_spending, 5), data = joined_num)
+
+summary(spending_model)
+```
+
+
+```{r}
+age_model <- lm(data = joined_num, tau ~ a13)
+
+summary(age_model)
+```
+
+```{r}
+boxplot(tau ~ a15, data = joined_num)
+```
+
+```{r}
+t_results <- t.test(tau ~ a15, data = joined_num
+       )
+
+t_results
+```
+
+```{r}
+joined_num %>%
+  mutate(old_young = a13 >= median(a13)) %>%
+  group_by(old_young, group1) %>%
+  summarise(group_mean = mean(any_drops))
+```
+
+```{r}
+eligible <- joined_num$birth_date < (13870 - 2190) & joined_num$birth_date > (13870 - 6205)
+
+ggplot(data = NULL, aes(x = joined_num$birth_date[eligible], y = tau.hat[eligible])) +
+  geom_jitter() + 
+  geom_smooth() +
+  geom_smooth(method = 'lm')
+```
+
+
+```{r}
+joined_num %>%
+  group_by(gender, group1) %>%
+  summarise(group_mean = mean(any_drops))
+```
+
+```{r}
+stud_age_model <- lm(data = joined_num[eligible,], tau ~ birth_date)
+
+summary(stud_age_model)
+```
+
+```{r}
+ggplot(data = joined_num, aes(group= ntile(birth_date, 5), y = tau)) +
+  geom_boxplot()
+```
+
+```{r}
+ggplot(data = joined_num, aes(group= ntile(monthly_spending, 5), y = tau)) +
+  geom_boxplot()
+```
+
+```{r}
+ggplot(data = joined_num, aes(group= ntile(a13, 5), y = joined_num$tau)) +
+  geom_boxplot()
+```
+
+```{r}
+
+plot_data <- joined_num
+plot_data[!(eligible), 'birth_date'] <- NA
+
+create_cowplot <- function(variable_list) {
+  plots <- vector(mode = "list", length = 2 * length(variable_list))
+  
+  new_plots <- map(
+    variable_list,
+    function (x) {
+      num_options <- nrow(unique(plot_data[x]))
+      
+      if (num_options < 10) {
+        plot1 <- ggplot(data = plot_data, aes(group=!!rlang::sym(x), y = tau)) +
+        geom_boxplot()
+        
+        plot2 <- NA 
+        
+        plot3 <- NA 
+          
+  #         ggplot(data = joined_num, aes(x = !!rlang::sym(x), y = tau)) +
+  # geom_jitter() + 
+  # geom_smooth(formula = y ~ s(x, bs = "cs", k=num_options))
+        
+      } else {
+        plot1 <- ggplot(data = plot_data, aes(group= ntile(!!rlang::sym(x), 5), y = tau)) +
+        geom_boxplot()
+        
+        plot2 <- ggplot(data = plot_data, aes(x = !!rlang::sym(x), y = tau)) +
+  geom_jitter() + 
+  geom_smooth()
+        
+        plot3 <- ggplot(data = plot_data, aes(x = !!rlang::sym(x), y = any_drops)) +
+  geom_jitter() + 
+  geom_smooth()
+      }
+      
+      
+      
+      list(plot1, plot2, plot3)
+    }
+  )
+  
+  for (i in 1:length(new_plots)) {
+    plots[[(i * 3) - 2]] <- new_plots[[i]][[1]]
+    plots[[(i * 3) - 1]] <- new_plots[[i]][[2]]
+    plots[[(i * 3) - 0]] <- new_plots[[i]][[3]]
+  }
+  
+  plot_grid(plotlist = plots, ncol = 3)
+}
+```
+
+```{r, fig.height = 10}
+create_cowplot(covariates) #%>% save_plot(filename = 'cowplot.png', base_height = 20)
+```
+
+
+
+```{r}
+t.test(joined_num[joined_num$group1 == 1, 'any_drops'], joined_num[joined_num$group1 == 0, 'any_drops'])
+```
+
+```{r}
+model1 <- lm(data = joined_num[eligible,], any_drops ~ birth_date + a13 + poly(monthly_spending, 5) + group1 + birth_date*group1 + a13*group1 + poly(monthly_spending, 5)*group1)
+
+
+model2 <- lm(data = joined_num[eligible,], any_drops ~ birth_date + a13 + monthly_spending + group1 + birth_date*group1 + a13*group1 + monthly_spending*group1)
+
+stargazer(model1, model2, type = "html", out = "reg_out.htm")
+```
+
