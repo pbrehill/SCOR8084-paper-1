@@ -1,0 +1,187 @@
+---
+title: "Graph PF"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(ggarchery)
+```
+
+```{r}
+pareto <- read_csv('pareto_results.csv') %>%
+  mutate(Surrogate = factor(Surrogate, levels = c("Greedy", "Hybrid", "Optimal", "Oracle")))
+
+surrogate_comp <- read_csv('surrogate_compv1.csv') %>%
+  mutate(Surrogate = factor(Surrogate, levels = c("Greedy", "Hybrid", "Optimal", "Oracle")))
+
+library(RColorBrewer)
+myColors <- brewer.pal(4,"Set1")
+names(myColors) <- levels(pareto$Surrogate)
+colScale <- scale_colour_manual(name = "Model",values = myColors)
+```
+
+```{r}
+tbl <- tibble(x = c(0.1, 0.2), xend = c(0.1, 0.8), y = c(0.1, 0.5), yend = c(0.7, 0.9))
+
+ggplot(pareto %>% filter( Surrogate != "Optimal"), aes(x = Dropout, y = Maths, colour = Surrogate), alpha = 0.5) +
+  geom_point() +
+  theme_bw() +
+  geom_line(aes(group = Parameter), colour = 'grey', alpha = 0.1) +
+  labs(x = "Expected effect for Dropout", y = "Expected effect for Maths") +
+  scale_colour_manual(name = "Model",values = myColors[c(1,2,4)])
+  
+
+ggsave('figure2.png', width = 5, height = 4)
+```
+
+```{r}
+tbl <- tibble(x = c(0.1, 0.2), xend = c(0.1, 0.8), y = c(0.1, 0.5), yend = c(0.7, 0.9))
+
+ggplot(pareto %>% filter( Surrogate != "Oracle"), aes(x = Dropout, y = Maths, colour = Surrogate), alpha = 0.5) +
+  geom_point() +
+  theme_bw() +
+  geom_line(aes(group = Parameter), colour = 'grey', alpha = 0.3) +
+  colScale
+  
+
+ggsave('opts.png')
+```
+
+```{r}
+tbl <- tibble(x = c(0.1, 0.2), xend = c(0.1, 0.8), y = c(0.1, 0.5), yend = c(0.7, 0.9))
+
+ggplot(surrogate_comp %>% filter( Surrogate != "Oracle"), aes(x = Dropouts, y = Maths, colour = Surrogate), alpha = 0.5) +
+  geom_point() +
+  theme_bw() +
+  colScale
+
+ggsave('opts_biased.png')
+```
+
+```{r}
+tbl <- tibble(x = c(0.1, 0.2), xend = c(0.1, 0.8), y = c(0.1, 0.5), yend = c(0.7, 0.9))
+
+ggplot(read_csv('surrogate_comp.csv'), aes(x = Dropouts, y = Maths, colour = Surrogate), alpha = 0.5) +
+  geom_point(alpha = 0.5) +
+  theme_bw() +
+  colScale +
+  labs(x = "Expected effect for Dropout", y = "Expected effect for Maths")
+
+ggsave('figure4.png')
+  
+
+```
+
+```{r}
+library(cowplot)
+
+```
+
+```{r}
+
+cow <- plot_grid(
+  ggplot(pareto %>% filter(Surrogate != "Oracle", Surrogate != "Optimal"), aes(x = Parameter, y = Dropout, colour = Surrogate)) +
+  geom_point() +
+  theme_bw() +
+    colScale  +
+  labs(x = "Hyperparameter value", y = "Expected effect for Maths"),
+  ggplot(pareto %>% filter(Surrogate != "Oracle", Surrogate != "Optimal"), aes(x = Parameter, y = Maths, colour = Surrogate)) +
+  geom_point() +
+  theme_bw() +
+    colScale  +
+  labs(x = "Hyperparameter value", y = "Expected effect for Maths")
+)
+cow
+save_plot("figure3.png", cow)
+
+```
+
+```{r}
+norm_df <- pareto %>%
+  filter(Surrogate != "Optimal" & Surrogate != "Oracle") %>%
+  rowwise() %>%
+  mutate(Norm = norm(matrix(c(Parameter * Dropout, (100.1 - Parameter) * Maths)), type = "2"),
+        type = ifelse(Surrogate == "Oracle", "Oracle", "Surrogate")
+  ) %>%
+  ungroup() %>%
+  select(Parameter, Norm, type) %>%
+  spread(key = type, value = Norm) %>%
+  left_join(
+    pareto %>% 
+      filter(Surrogate != "Oracle" & Surrogate != "Optimal") %>%
+      select(Surrogate, Parameter, Oracle) %>%
+      dplyr::rename(`Surrogate type` = Surrogate),
+    by = "Parameter"
+    ) %>%
+  mutate(`Difference from oracle` = abs(Oracle - Surrogate))
+  
+```
+
+```{r}
+greedy <- norm_df  %>%
+  select(Surrogate, `Difference from oracle`, Parameter, `Surrogate type`) %>%
+  gather("Type", "Norm", -Parameter, -`Surrogate type`) %>%
+  filter(`Surrogate type` == "Greedy") %>%
+  group_by(Parameter) %>%
+  mutate(Norm = Norm / sum(Norm)) %>%
+  ggplot(aes(x=as.character(Parameter), y = Norm, fill = Type)) +
+    geom_col() + 
+    scale_y_continuous(labels = scales::percent) +
+    theme(axis.ticks.x=element_blank(), 
+          axis.text.x=element_blank(),
+          legend.position = "none"
+          ) +
+    xlab("Greedy") +
+    ylab("Percentage of distance")
+
+hybrid <- norm_df  %>%
+  select(Surrogate, `Difference from oracle`, Parameter, `Surrogate type`) %>%
+  gather("Type", "Norm", -Parameter, -`Surrogate type`) %>%
+    filter(`Surrogate type` == "Hybrid") %>%
+  group_by(Parameter) %>%
+  mutate(Norm = Norm / sum(Norm)) %>%
+  ggplot(aes(x=as.character(Parameter), y = Norm, fill = Type)) +
+    geom_col() + 
+    scale_y_continuous(labels = scales::percent) +
+    theme(axis.ticks.x=element_blank(), 
+          axis.text.x=element_blank(),
+          legend.position = "none"
+          ) +
+    xlab("Hybrid") +
+    ylab("")
+
+save_plot("ranked_fit.png", plot_grid(greedy, hybrid))
+```
+
+```{r}
+read_csv('surrogate_comp.csv') %>%
+  filter(!is.na(Regret)) %>%
+  group_by(Surrogate) %>%
+  ggplot(aes(x=Regret)) +
+    geom_histogram(aes(y = ..density..), bins = 15) +
+    facet_grid(cols = vars(Surrogate))
+
+ggsave("surrogate_results.png")
+```
+
+```{r}
+scv1 <- read_csv('surrogate_compv1.csv')
+```
+
+```{r}
+scv1 %>%
+  filter(Surrogate != "Optimal") %>%
+  mutate(`Distance from optimal model` = Adjusted) %>%
+  ggplot(aes(x = `Dropout dist`, y = `Maths dist`)) +
+    geom_point(alpha = 0.3)  +
+    geom_point(aes(x = 0, y = 0), color = 'red', size = 3)+
+    theme_bw() +
+    facet_wrap(vars(Surrogate)) +
+    labs(x = "Dropout prediction relative to optimal", y = "Maths prediction relative to optimal")
+
+ggsave('figure6.png', width = 7, height = 4)
+```
+
+
+

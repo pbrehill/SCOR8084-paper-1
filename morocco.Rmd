@@ -11,7 +11,6 @@ library(grf)
 library(car)
 library(pcaMethods)
 library(cowplot)
-library(caret)
 library(stargazer)
 library(lm.beta)
 ```
@@ -50,7 +49,8 @@ joined <- baseline %>%
 baseline %<>%
   mutate(schoolunitid = factor(schoolunitid),
          group1 = car::recode(group, "0 = NA; 1=1; 2:50 = 0"),
-         group2 = car::recode(group, "0 = NA; 1=NA "))
+         group2 = car::recode(group, "0 = NA; 1=NA "),
+         )
 ```
 
 ```{r}
@@ -142,12 +142,14 @@ maths_results <- rowSums(maths[c('t6', 't5_1', 't4_1', 't3_1')])
 
 
 ```{r}
-joined1 <- baseline[c('hhid', 'group1', 'group2', 'monthly_spending')] %>%
-  left_join(num_kids, by = "hhid") %>%
+joined1 <- baseline[c('hhid', 'group', 'monthly_spending')] %>%
+  # left_join(num_kids, by = "hhid") %>%
   left_join(temp, by = "hhid") %>%
   filter(!duplicated(hhid))
 
 # joined1$PCA <- pca_results@scores %>% c()
+
+maths$maths_results <- rowSums(maths[c('t6', 't5_1', 't4_1', 't3_1')])
 
 joined1 %<>%
   left_join(maths, by = "hhid")
@@ -175,28 +177,41 @@ joined
 ```
 
 ```{r}
-joined1 <- joined1[c('a4', 'a13', 'est_num_kids', 'monthly_spending', 'any_drops', 'group1', 'a15', 'datenaiseleve', 'genre_el', 'hhid')]
+covariates <- c('hhh_gender', 'hhh_age', 'monthly_spending', 'any_drops', 'hhh_literacy', 'age', 'gender', 'hhid', 'group', 'benef')
 
+X_vars <- c('hhh_gender', 'hhh_age', 'monthly_spending', 'hhh_literacy', 'age', 'gender', 'benef')
 
+joined1 %<>%
+    dplyr::rename(hhh_age = a13,
+          hhh_gender = a4,
+          hhh_literacy = a15,
+          age = datenaiseleve,
+          gender = genre_el,
+          group = group.x)
+
+joined1 <- joined1[covariates]
+```
+
+```{r}
  joined_num <- joined1 %>%
 #   mutate(cluster = as.factor(hhid)) %>%
-  mutate(gender = factor(genre_el),
-         birth_date = datenaiseleve %>% as.Date(),
-         hhid = as.factor(hhid)) %>%
-  select(-genre_el, -datenaiseleve) %>%
-  mutate_all(as.numeric) %>%
+  mutate(gender = factor(gender),
+         hhid = as.factor(hhid),
+         group = factor(group),
+         benef = factor(benef)
+         ) %>%
+  mutate(age = difftime(as.Date("2010-01-01"), age)) %>%
+  mutate(across(!hhid), as.numeric) %>%
   mutate(any_drops = (any_drops - 1) * -1)
  
 joined_num[joined_num < 0] <- NA
 joined_num <- joined_num[complete.cases(joined_num),]
 
-covariates <- c('a4', 'a13', 'est_num_kids', 'monthly_spending', 'a15', 'birth_date', 'gender')
-
-X <- joined_num[covariates]
+X <- joined_num[X_vars]
 ```
 
 ```{r rename variables}
-joined_num
+joined_num %>% write_rds('morocco.rds')
 ```
 
 
@@ -220,7 +235,8 @@ joined_num$tau <- tau.hat
 ```
 
 ```{r}
-qplot(x=tau.hat)
+qplot(x=tau.hat) + xlab("Estimated individual treatment effect")
+ggsave('tauhat.png')
 ```
 
 ```{r}
@@ -229,11 +245,18 @@ ATE = average_treatment_effect ( cf.raw )
 paste ("95% CI for the ATE:", round ( ATE [1] , 3) ,"+/ -", round ( qnorm (0.975) * ATE [2] , 3))
 ```
 ```{r}
-test_calibration(cf.raw)
+test_calibration(cf.raw) %>% stargazer(type = "html", out = "calibrationtest.htm")
 ```
 
 ```{r}
-variable_importance(cf.raw)
+varimp <- variable_importance(cf.raw) %>% as.data.frame.matrix()
+
+varimp <- bind_cols(X_vars, format(varimp %>% pull() %>% round(3), nsmall = 3))
+names(varimp) <- c("Variable", "Importance")
+```
+
+```{r}
+stargazer(varimp, type = "html", out = "varimp.htm", summary = FALSE)
 ```
 
 
@@ -246,7 +269,7 @@ ggplot(data = NULL, aes(x = joined_num$monthly_spending, y = tau.hat)) +
 ```
 
 ```{r}
-ggplot(data = NULL, aes(x = joined_num$a13, y = tau.hat)) +
+ggplot(data = NULL, aes(x = joined_num$hhh_age, y = tau.hat)) +
   geom_jitter(alpha = 0.1) +
   geom_smooth()
 ```
@@ -284,17 +307,17 @@ summary(spending_model)
 
 
 ```{r}
-age_model <- lm(data = joined_num, tau ~ a13)
+age_model <- lm(data = joined_num, tau ~ hhh_age)
 
 summary(age_model)
 ```
 
 ```{r}
-boxplot(tau ~ a15, data = joined_num)
+boxplot(tau ~ hhh_literacy, data = joined_num)
 ```
 
 ```{r}
-t_results <- t.test(tau ~ a15, data = joined_num
+t_results <- t.test(tau ~ hhh_literacy, data = joined_num
        )
 
 t_results
@@ -302,15 +325,15 @@ t_results
 
 ```{r}
 joined_num %>%
-  mutate(old_young = a13 >= median(a13)) %>%
+  mutate(old_young = hhh_age >= median(hhh_age)) %>%
   group_by(old_young, group1) %>%
   summarise(group_mean = mean(any_drops))
 ```
 
 ```{r}
-eligible <- joined_num$birth_date < (13870 - 2190) & joined_num$birth_date > (13870 - 6205)
+eligible <- (joined_num$age >= 2190) & (joined_num$age <= (6205))
 
-ggplot(data = NULL, aes(x = joined_num$birth_date[eligible], y = tau.hat[eligible])) +
+ggplot(data = NULL, aes(x = joined_num$age[eligible], y = tau.hat[eligible])) +
   geom_jitter() + 
   geom_smooth() +
   geom_smooth(method = 'lm')
@@ -324,13 +347,15 @@ joined_num %>%
 ```
 
 ```{r}
-stud_age_model <- lm(data = joined_num[eligible,], tau ~ birth_date)
+stud_age_model <- lm(data = joined_num[eligible,], tau ~ age)
 
 summary(stud_age_model)
 ```
 
 ```{r}
-ggplot(data = joined_num, aes(group= ntile(birth_date, 5), y = tau)) +
+plot_data <- joined_num
+
+ggplot(data = plot_data[eligible,], aes(group= ntile(age, 5), y = tau)) +
   geom_boxplot()
 ```
 
@@ -340,14 +365,14 @@ ggplot(data = joined_num, aes(group= ntile(monthly_spending, 5), y = tau)) +
 ```
 
 ```{r}
-ggplot(data = joined_num, aes(group= ntile(a13, 5), y = joined_num$tau)) +
+ggplot(data = joined_num, aes(group= ntile(hhh_age, 5), y = joined_num$tau)) +
   geom_boxplot()
 ```
 
 ```{r}
 
 plot_data <- joined_num
-plot_data[!(eligible), 'birth_date'] <- NA
+plot_data[!(eligible), 'age'] <- NA
 
 create_cowplot <- function(variable_list) {
   plots <- vector(mode = "list", length = 2 * length(variable_list))
@@ -357,49 +382,63 @@ create_cowplot <- function(variable_list) {
     function (x) {
       num_options <- nrow(unique(plot_data[x]))
       
-      if (num_options < 10) {
+      if (x == "age") {
+        plot1 <- ggplot(data = plot_data[eligible,], aes(group= ntile(!!rlang::sym(x), 5), y = tau)) +
+        geom_boxplot()  +
+          xlab(x)
+        
+        plot2 <- ggplot(data = plot_data[eligible,], aes(x = !!rlang::sym(x), y = tau)) +
+  geom_jitter() + 
+  geom_smooth()
+        
+        
+      } else if (x == "est_num_kids") {
+        plot1 <- ggplot(data = plot_data[eligible,], aes(group= ntile(!!rlang::sym(x), 5), y = tau)) +
+        geom_boxplot()  +
+          xlab(x)
+        
+        plot2 <- ggplot(data = plot_data[eligible,], aes(x = !!rlang::sym(x), y = tau)) +
+  geom_jitter() + 
+  geom_smooth(method="gam", formula = y ~ s(x, bs = "cs", k=5))
+        
+        
+      } else if (num_options < 10) {
         plot1 <- ggplot(data = plot_data, aes(group=!!rlang::sym(x), y = tau)) +
-        geom_boxplot()
+        geom_boxplot() +
+          xlab(x)
         
         plot2 <- NA 
         
-        plot3 <- NA 
           
   #         ggplot(data = joined_num, aes(x = !!rlang::sym(x), y = tau)) +
   # geom_jitter() + 
   # geom_smooth(formula = y ~ s(x, bs = "cs", k=num_options))
-        
       } else {
         plot1 <- ggplot(data = plot_data, aes(group= ntile(!!rlang::sym(x), 5), y = tau)) +
-        geom_boxplot()
+        geom_boxplot() +
+          xlab(x)
         
         plot2 <- ggplot(data = plot_data, aes(x = !!rlang::sym(x), y = tau)) +
-  geom_jitter() + 
-  geom_smooth()
-        
-        plot3 <- ggplot(data = plot_data, aes(x = !!rlang::sym(x), y = any_drops)) +
   geom_jitter() + 
   geom_smooth()
       }
       
       
-      
-      list(plot1, plot2, plot3)
+      list(plot1, plot2)
     }
   )
   
   for (i in 1:length(new_plots)) {
-    plots[[(i * 3) - 2]] <- new_plots[[i]][[1]]
-    plots[[(i * 3) - 1]] <- new_plots[[i]][[2]]
-    plots[[(i * 3) - 0]] <- new_plots[[i]][[3]]
+    plots[[(i * 2) - 1]] <- new_plots[[i]][[1]]
+    plots[[(i * 2) - 0]] <- new_plots[[i]][[2]]
   }
   
-  plot_grid(plotlist = plots, ncol = 3)
+  plot_grid(plotlist = plots, ncol = 2)
 }
 ```
 
 ```{r, fig.height = 10}
-create_cowplot(covariates) #%>% save_plot(filename = 'cowplot.png', base_height = 20)
+create_cowplot(X_vars) %>% save_plot(filename = 'cowplot.png', base_height = 20, base_width = 7.5)
 ```
 
 
@@ -409,10 +448,10 @@ t.test(joined_num[joined_num$group1 == 1, 'any_drops'], joined_num[joined_num$gr
 ```
 
 ```{r}
-model1 <- lm(data = joined_num[eligible,], any_drops ~ birth_date + a13 + poly(monthly_spending, 5) + group1 + birth_date*group1 + a13*group1 + poly(monthly_spending, 5)*group1)
+model1 <- lm(data = joined_num[eligible,], any_drops ~ age + hhh_age + poly(monthly_spending, 5) + group1 + age*group1 + hhh_age*group1 + poly(monthly_spending, 5)*group1, family=binomial(link='logit'))
 
 
-model2 <- lm(data = joined_num[eligible,], any_drops ~ birth_date + a13 + monthly_spending + group1 + birth_date*group1 + a13*group1 + monthly_spending*group1)
+model2 <- lm(data = joined_num[eligible,], any_drops ~ age + hhh_age + monthly_spending + group1 + age*group1 + hhh_age*group1 + monthly_spending*group1, family=binomial(link='logit'))
 
 stargazer(model1, model2, type = "html", out = "reg_out.htm")
 ```
