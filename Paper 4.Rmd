@@ -1,0 +1,95 @@
+---
+title: "Paper 4"
+output: html_notebook
+---
+# Set-up
+
+```{r}
+library(tidyverse)
+library(grf)
+library(readxl)
+
+morocco <- read_rds('morocco.rds')
+X_vars <- c('hhh_gender', 'hhh_age', 'monthly_spending', 'hhh_literacy', 'age', 'gender', 'benef')
+morocco2 <- read_rds('morocco2.rds')
+
+baseline_guide <- read_excel('LCT Morroco/codebook_cct_baseline_18Feb2013_anon_en.dta.xlsx') %>% 
+  t() %>%
+  as.data.frame()
+
+names(baseline_guide) <- baseline_guide[1,]
+baseline_guide <- baseline_guide[-1,]
+
+all_na <- function(x) sum(is.na(x)) == length(x)
+
+set.seed(1)
+```
+
+
+# Main analysis
+
+## Manual selection
+```{r}
+# code adapted from Athey et al. (2019)
+cf.raw = causal_forest (morocco[X_vars], morocco$any_drops, morocco$group_cond %>% as.numeric(),
+  Y.hat = NULL , W.hat = NULL,
+  num.trees = 10000,
+  clusters = morocco$hhid
+  )
+
+tau.hat = predict(cf.raw)$predictions
+morocco$tau <- tau.hat
+
+qplot(x=tau.hat) + xlab("Estimated individual treatment effect") +
+  geom_vline(xintercept = 0)
+ggsave('tauhat.png')
+```
+
+```{r}
+# code adapted from Athey et al. (2019)
+covars <- morocco2 %>% select(-any_drops, -group_cond, -hhid, age) %>% select_if(~ !all(is.na(.)))
+
+cf.complete = causal_forest (covars, morocco2$any_drops, morocco2$group_cond %>% as.numeric(),
+  Y.hat = NULL , W.hat = NULL,
+  num.trees = 1000,
+  clusters = morocco2$hhid
+  )
+
+tau.hat = predict(cf.complete)$predictions
+morocco2$tau <- tau.hat
+
+qplot(x=tau.hat) + xlab("Estimated individual treatment effect") +
+  geom_vline(xintercept = 0)
+ggsave('tauhat2.png')
+```
+ATE difference
+```{r}
+average_treatment_effect(cf.raw)
+average_treatment_effect(cf.complete)
+```
+```{r}
+names(covars) <- ifelse(names(covars) %in% row.names(baseline_guide), 
+                        paste0(names(covars), baseline_guide[names(covars), "Dataset Label"]),
+                        names(covars)
+                        )
+```
+
+```{r}
+data.frame(name = names(covars) %>% str_wrap(40), imp = variable_importance(cf.complete)) %>%
+  arrange(desc(imp)) %>% head(20) %>%
+  ggplot(aes(x = reorder(name, imp), y = imp)) +
+    geom_col() + 
+    theme(axis.text.x = element_text(angle = 90))
+```
+
+```{r}
+data.frame(name = names(morocco[X_vars]), imp = variable_importance(cf.raw)) %>%
+  arrange(desc(imp)) %>%
+  ggplot(aes(x = reorder(name, imp), y = imp)) +
+    geom_col() + 
+    theme(axis.text.x = element_text(angle = 90))
+```
+
+
+# Refutation tests
+

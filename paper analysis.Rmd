@@ -12,6 +12,7 @@ library(mlr)
 library(cowplot)
 library(broom)
 morocco <- read_rds('morocco.rds')
+morocco2 <- read_rds('morocco2.rds')
 ```
 
 ```{r}
