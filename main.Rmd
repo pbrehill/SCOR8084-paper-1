@@ -1,0 +1,25 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(magrittr)
+library(haven)
+```
+
+```{r}
+hhdf <- read_dta('pooled_hh.dta')
+iddf <- read_dta('pooled_mb.dta')
+
+hhdf %<>% rename(id_hh = id)
+
+joint_df <- iddf %>%
+  left_join(hhdf, by = 'id_hh', suffix = c("", ".y")) %>%
+  select_at(
+    vars(-ends_with(".y"))
+  )
+```
+

@@ -9,10 +9,10 @@ library(magrittr)
 library(haven)
 library(grf)
 library(car)
-library(pcaMethods)
+# library(pcaMethods)
 library(cowplot)
 library(stargazer)
-library(lm.beta)
+# library(lm.beta)
 ```
 
 
@@ -143,7 +143,7 @@ maths_results <- rowSums(maths[c('t6', 't5_1', 't4_1', 't3_1')])
 
 ```{r}
 joined1 <- baseline[c('hhid', 'group', 'monthly_spending')] %>%
-  # left_join(num_kids, by = "hhid") %>%
+  left_join(num_kids, by = "hhid") %>%
   left_join(temp, by = "hhid") %>%
   filter(!duplicated(hhid))
 
@@ -201,7 +201,7 @@ joined1 <- joined1[covariates]
          benef = factor(benef)
          ) %>%
   mutate(age = difftime(as.Date("2010-01-01"), age)) %>%
-  mutate(across(!hhid), as.numeric) %>%
+  mutate_at(vars(-hhid), as.numeric) %>%
   mutate(any_drops = (any_drops - 1) * -1)
  
 joined_num[joined_num < 0] <- NA

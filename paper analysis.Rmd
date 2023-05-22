@@ -1,0 +1,254 @@
+---
+title: "Paper results"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(grf)
+library(plyr)
+library(policytree)
+library(mlr)
+library(cowplot)
+library(broom)
+morocco <- read_rds('morocco.rds')
+```
+
+```{r}
+# Join on maths
+
+maths$maths_results <- rowSums(maths[c('t6', 't5_1', 't4_1', 't3_1')])
+
+two_outcome <- morocco %>%
+  mutate(hhid = as.character(hhid)) %>%
+  inner_join(maths %>% select(hhid, maths_results), by = "hhid") %>%
+  mutate(maths_results_s = scale(maths_results) %>% as.numeric(),
+         any_drops_n = scale(as.numeric(any_drops)) %>% as.numeric(),
+         female = gender == 'F'
+         ) %>%
+  left_join(baseline %>% select(hhid)) %>%
+  mutate(group = as_factor(group)) %>%
+  mutate(gender = factor(gender),
+         hhid = as.factor(hhid)) %>%
+  na.omit()
+
+```
+
+```{r}
+X_vars <- c('hhh_gender', 'hhh_age', 'monthly_spending', 'hhh_literacy', 'age', 'gender', 'benef')
+
+Y_vars <- c("maths_results_s", "any_drops_n")
+```
+
+
+```{r}
+cf.raw = multi_arm_causal_forest(
+  two_outcome[X_vars] %>% mutate_all(as.numeric), 
+  two_outcome[Y_vars], 
+  two_outcome$group,
+  Y.hat = NULL ,
+  W.hat = two_outcome$group %>% table %>% prop.table() %>% as.vector()
+  )
+
+tau.hat = predict(cf.raw)$predictions %>% plyr::adply(1:3)
+```
+
+```{r}
+# For maths
+tau.hat %>%
+  mutate(
+    X3 = str_replace_all(X3, "maths_results_s", "Maths results")
+    ) %>%
+  mutate(X3 = str_replace_all(X3, "any_drops_n", "Dropouts")) %>%
+  ggplot(aes(x = V1)) + geom_histogram() + facet_grid(X2 ~ X3) +
+    theme_bw() +
+    xlab('Individual treatment effect') +
+    theme(text = element_text(size=8))
+
+ggsave('arm_ATEs.png', width = 5, height = 4)
+```
+
+```{r}
+average_treatment_effect(cf.raw) %>% 
+  mutate(
+    t = (estimate / std.err),
+    p = 2 * pt(-abs(t), nrow(tau.hat) - 1)
+) %>% write_csv('treatments.csv')
+```
+
+```{r}
+two_outcome$X1 <- seq.int(nrow(two_outcome))
+combined <- left_join(tau.hat %>% mutate(X1 = X1 %>% as.numeric), two_outcome, by = "X1")
+```
+
+```{r}
+
+graph_vars <- function(data, x, tau) {
+  
+  if (length(unique(x)) < 10) {
+    ggplot(data, aes(x = x, y = tau)) +
+    geom_point() + geom_violin()
+  } else {
+    ggplot(data, aes(x = x, y = tau)) +
+    geom_point() + geom_smooth()
+  }
+}
+
+```
+
+```{r}
+combined <-combined %>% mutate(hhh_age = as.numeric(hhh_age),
+                  hhh_literacy = factor(
+                    hhh_literacy,
+                    levels = c("1", "2"), 
+                    labels = c("Yes", "No"))
+                           )
+```
+
+```{r}
+
+big_maths <- plot_grid(
+  ggplot(combined %>% filter(X3 == "maths_results_s"), aes(x = benef, y = V1)) +
+    geom_violin() +
+    facet_grid(cols = vars(X3, X2)) +
+    stat_summary(fun = "mean",
+               geom = "crossbar", 
+               width = 0.5,
+               colour = "blue"),
+  ggplot(combined %>% filter(X3 == "maths_results_s"), aes(x = hhh_literacy, y = V1)) +
+    geom_violin() +
+    facet_grid(cols = vars(X3, X2)) +
+    stat_summary(fun = "mean",
+               geom = "crossbar", 
+               width = 0.5,
+               colour = "blue"),
+  ggplot(combined %>% filter(X3 == "maths_results_s"), aes(x = gender, y = V1)) +
+    geom_violin() +
+    facet_grid(cols = vars(X3, X2)) +
+    stat_summary(fun = "mean",
+               geom = "crossbar", 
+               width = 0.5,
+               colour = "blue"),
+  ggplot(combined %>% filter(X3 == "maths_results_s"), aes(x = hhh_age, y = V1)) +
+    geom_point(alpha = 0.1) + geom_smooth() +
+    facet_grid(cols = vars(X3, X2)),
+  ggplot(combined %>% filter(X3 == "maths_results_s"), aes(x = monthly_spending, y = V1)) +
+    geom_point(alpha = 0.1) + geom_smooth() +
+    facet_grid(cols = vars(X3, X2)),
+  ggplot(combined %>% filter(X3 == "maths_results_s"), aes(x = age, y = V1)) +
+    geom_point(alpha = 0.1) + geom_smooth() +
+    facet_grid(cols = vars(X3, X2))
+)
+```
+
+```{r}
+big_drop <- plot_grid(
+  ggplot(combined %>% filter(X3 == "any_drops_n"), aes(x = benef, y = V1)) +
+    geom_violin() +
+    facet_grid(cols = vars(X3, X2)) +
+    stat_summary(fun = "mean",
+               geom = "crossbar", 
+               width = 0.5,
+               colour = "blue"),
+  ggplot(combined %>% filter(X3 == "any_drops_n"), aes(x = hhh_literacy, y = V1)) +
+    geom_violin() +
+    facet_grid(cols = vars(X3, X2)) +
+    stat_summary(fun = "mean",
+               geom = "crossbar", 
+               width = 0.5,
+               colour = "blue"),
+  ggplot(combined %>% filter(X3 == "any_drops_n"), aes(x = gender, y = V1)) +
+    geom_violin() +
+    facet_grid(cols = vars(X3, X2)) +
+    stat_summary(fun = "mean",
+               geom = "crossbar", 
+               width = 0.5,
+               colour = "blue"),
+  ggplot(combined %>% filter(X3 == "any_drops_n"), aes(x = hhh_age, y = V1)) +
+    geom_point(alpha = 0.1) + geom_smooth() +
+    facet_grid(cols = vars(X3, X2)),
+  ggplot(combined %>% filter(X3 == "any_drops_n"), aes(x = monthly_spending, y = V1)) +
+    geom_point(alpha = 0.1) + geom_smooth() +
+    facet_grid(cols = vars(X3, X2)),
+  ggplot(combined %>% filter(X3 == "any_drops_n"), aes(x = age, y = V1)) +
+    geom_point(alpha = 0.1) + geom_smooth() +
+    facet_grid(cols = vars(X3, X2))
+)
+
+```
+
+```{r}
+ttests <- list(
+  map(unique(combined$X2), ~t.test(
+  combined %>% filter(X2 == .x, X3 == "maths_results_s", benef == "Mother") %>% select(V1),
+  combined %>% filter(X2 == .x, X3 == "maths_results_s", benef == "Father") %>% select(V1)
+)),
+map(unique(combined$X2), ~t.test(
+  combined %>% filter(X2 == .x, X3 == "maths_results_s", hhh_literacy == "Yes") %>% select(V1),
+  combined %>% filter(X2 == .x, X3 == "maths_results_s", hhh_literacy == "No") %>% select(V1)
+)),
+map(unique(combined$X2), ~t.test(
+  combined %>% filter(X2 == .x, X3 == "maths_results_s", gender == "F") %>% select(V1),
+  combined %>% filter(X2 == .x, X3 == "maths_results_s", gender == "M") %>% select(V1)
+)),
+map(unique(combined$X2), ~t.test(
+  combined %>% filter(X2 == .x, X3 == "maths_results_s", hhh_age >= median(hhh_age)) %>% select(V1),
+  combined %>% filter(X2 == .x, X3 == "maths_results_s", hhh_age < median(hhh_age)) %>% select(V1)
+)),
+map(unique(combined$X2), ~t.test(
+  combined %>% filter(X2 == .x, X3 == "maths_results_s", monthly_spending >= median(monthly_spending)) %>% select(V1),
+  combined %>% filter(X2 == .x, X3 == "maths_results_s", monthly_spending < median(monthly_spending)) %>% select(V1)
+)),
+map(unique(combined$X2), ~t.test(
+  combined %>% filter(X2 == .x, X3 == "maths_results_s", age >= median(age)) %>% select(V1),
+  combined %>% filter(X2 == .x, X3 == "maths_results_s", age < median(age)) %>% select(V1)
+)),
+
+
+
+
+map(unique(combined$X2), ~t.test(
+  combined %>% filter(X2 == .x, X3 == "any_drops_n", benef == "Mother") %>% select(V1),
+  combined %>% filter(X2 == .x, X3 == "any_drops_n", benef == "Father") %>% select(V1)
+)),
+map(unique(combined$X2), ~t.test(
+  combined %>% filter(X2 == .x, X3 == "any_drops_n", hhh_literacy == "Yes") %>% select(V1),
+  combined %>% filter(X2 == .x, X3 == "any_drops_n", hhh_literacy == "No") %>% select(V1)
+)),
+map(unique(combined$X2), ~t.test(
+  combined %>% filter(X2 == .x, X3 == "any_drops_n", gender == "F") %>% select(V1),
+  combined %>% filter(X2 == .x, X3 == "any_drops_n", gender == "M") %>% select(V1)
+)),
+map(unique(combined$X2), ~t.test(
+  combined %>% filter(X2 == .x, X3 == "any_drops_n", hhh_age >= median(hhh_age)) %>% select(V1),
+  combined %>% filter(X2 == .x, X3 == "any_drops_n", hhh_age < median(hhh_age)) %>% select(V1)
+)),
+map(unique(combined$X2), ~t.test(
+  combined %>% filter(X2 == .x, X3 == "any_drops_n", monthly_spending >= median(monthly_spending)) %>% select(V1),
+  combined %>% filter(X2 == .x, X3 == "any_drops_n", monthly_spending < median(monthly_spending)) %>% select(V1)
+)),
+map(unique(combined$X2), ~t.test(
+  combined %>% filter(X2 == .x, X3 == "any_drops_n", age >= median(age)) %>% select(V1),
+  combined %>% filter(X2 == .x, X3 == "any_drops_n", age < median(age)) %>% select(V1)
+))
+)
+                                       
+```
+
+```{r}
+map_df(ttests, ~map_df(.x, tidy)) %>% write_csv('ttests.csv')
+```
+
+```{r}
+resultt <- t.test(
+  combined %>% filter(X2 == combined$X2[1], X3 == "any_drops_n", age >= median(age)) %>% select(V1),
+  combined %>% filter(X2 == combined$X2[1], X3 == "any_drops_n", age < median(age)) %>% select(V1)
+)
+```
+
+
+
+
+
+
+
