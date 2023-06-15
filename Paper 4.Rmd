@@ -6,12 +6,22 @@ output: html_notebook
 
 ```{r}
 library(tidyverse)
+library(magrittr)
 library(grf)
 library(readxl)
+library(cowplot)
 
-morocco <- read_rds('morocco.rds')
-X_vars <- c('hhh_gender', 'hhh_age', 'monthly_spending', 'hhh_literacy', 'age', 'gender', 'benef')
-morocco2 <- read_rds('morocco2.rds')
+morocco <- read_rds('morocco.rds') %>%
+  filter(group > 1) %>%
+  mutate(group = group -1)
+
+big_covars <- morocco %>% select(-hhid, -maths_results, -group, -ksm_c1_:-ksm_c6_)
+
+X_vars <- c('hhh_gender', 'hhh_age', 'monthly_spending', 'hhh_literacy', 'age', 'gender', 'benef', 'school_spending', 'c1_3_21_1')
+```
+
+```{r}
+
 
 baseline_guide <- read_excel('LCT Morroco/codebook_cct_baseline_18Feb2013_anon_en.dta.xlsx') %>% 
   t() %>%
@@ -25,71 +35,301 @@ all_na <- function(x) sum(is.na(x)) == length(x)
 set.seed(1)
 ```
 
+# ATE analysis
+## Treatment vs no treatment
+```{r}
+indiv_treat <- multi_arm_causal_forest (big_covars, morocco$maths_results, morocco$group %>% as.factor(),
+  Y.hat = NULL , W.hat = NULL,
+  num.trees = 10000
+  )
+
+comprehension <- multi_arm_causal_forest (select(morocco, -hhid, -maths_results, -group), morocco$maths_results, morocco$group %>% as.factor(),
+  Y.hat = indiv_treat$Y.hat, W.hat = indiv_treat$W.hat,
+  num.trees = 10000
+  )
+
+write_rds(indiv_treat, 'indiv_treat.rds')
+```
+
+```{r}
+comparison <- multi_arm_causal_forest (big_covars[X_vars], morocco$maths_results, morocco$group %>% as.factor(),
+  Y.hat = NULL , W.hat = NULL,
+  num.trees = 10000
+  )
+
+```
+
+# Figure 1
+
+```{r}
+indiv_ate <- average_treatment_effect(indiv_treat)
+indiv_plots <- map(1:length(indiv_ate$contrast), function(x) {
+  ate_est <- indiv_ate[x,][c("estimate", "std.err")] %>% unlist()
+  preds <- indiv_treat$predictions[,x]
+  qplot(x = preds) + 
+    geom_vline(xintercept = 0, linetype = "dashed") +
+    geom_vline(xintercept = ate_est['estimate'], color = "blue") +
+    scale_y_continuous(limits = c(0, 600)) +
+    annotate("rect", 
+             xmin = ate_est['estimate'] - (1.96 * ate_est['std.err']), 
+             xmax = ate_est['estimate'] + (1.96 * ate_est['std.err']), ymin = 0, ymax = Inf,
+             alpha = .1,fill = "blue") +
+    ggtitle("Contrast ", paste0(indiv_ate$contrast[x])) + 
+    labs(x = "Predictions", y = "Counts")
+})
+save_plot('contrasts.png', cowplot::plot_grid(plotlist = indiv_plots), base_height = 5)
+```
+
+```{r}
+indiv_ate <- average_treatment_effect(comparison)
+indiv_plots <- map(1:length(indiv_ate$contrast), function(x) {
+  ate_est <- indiv_ate[x,][c("estimate", "std.err")] %>% unlist()
+  preds <- indiv_treat$predictions[,x]
+  qplot(x = preds) + 
+    geom_vline(xintercept = 0, linetype = "dashed") +
+    geom_vline(xintercept = ate_est['estimate'], color = "blue") +
+    scale_y_continuous(limits = c(0, 600)) +
+    annotate("rect", 
+             xmin = ate_est['estimate'] - (1.96 * ate_est['std.err']), 
+             xmax = ate_est['estimate'] + (1.96 * ate_est['std.err']), ymin = 0, ymax = Inf,
+             alpha = .1,fill = "blue") +
+    ggtitle("Contrast ", paste0(indiv_ate$contrast[x])) + 
+    labs(x = "Predictions", y = "Counts")
+})
+save_plot('contrasts1.png', cowplot::plot_grid(plotlist = indiv_plots), base_height = 5)
+```
+## Table
 
 # Main analysis
 
-## Manual selection
+## Auto selection
 ```{r}
-# code adapted from Athey et al. (2019)
-cf.raw = causal_forest (morocco[X_vars], morocco$any_drops, morocco$group_cond %>% as.numeric(),
+get_labels <- function(x, source) {
+  data.frame(label = sapply(source, attr,"label") %>% unlist()) %>%
+    rownames_to_column() %>%
+    right_join(x, by = c("rowname"= "name"))
+}
+```
+
+
+```{r}
+data.frame(name = names(select(morocco, -hhid, -maths_results, -group)), imp = variable_importance(comprehension)) %>%
+  arrange(desc(imp)) %>%
+  head(30) %>%
+  ggplot(aes(x = reorder(name, imp), y = imp)) +
+    geom_col() + 
+    theme(axis.text.x = element_text(angle = 90)) +
+    labs(x = "Variable", y = "Importance")
+
+ggsave('comp_importance.png')
+```
+
+```{r}
+data.frame(name = names(big_covars), imp = variable_importance(indiv_treat)) %>%
+  arrange(desc(imp)) %>%
+  head(30) %>%
+  ggplot(aes(x = reorder(name, imp), y = imp)) +
+    geom_col() + 
+    theme(axis.text.x = element_text(angle = 90)) +
+    labs(x = "Variable", y = "Importance")
+
+ggsave('all_importance.png')
+```
+
+## Check ranking stability
+
+```{r}
+all_vars2 <- multi_arm_causal_forest (big_covars, morocco$maths_results, morocco$group %>% as.factor(),
   Y.hat = NULL , W.hat = NULL,
   num.trees = 10000,
-  clusters = morocco$hhid
+  seed = 20
+  )
+```
+
+```{r}
+source("imp_variance.R")
+
+imp_var <- get_imp_variance(big_covars, morocco$maths_results, morocco$group %>% as.factor(), 10, num_tree = 10000)
+```
+
+```{r}
+imp_var[[1]]$names <- names(big_covars)
+imp_var[[1]] %>%
+  arrange(desc(mean_importances)) %>%
+  select(names, mean_importances, std_importances, std_rnks) %>%
+  head(20) %>%
+  write_csv('var_imps.csv')
+```
+
+
+```{r}
+data.frame(name = names(big_covars), imp = variable_importance(all_vars)) %>%
+  left_join(select(imp_var$stats, name, std_rnks)) %>%
+  mutate(std_std_rnks = std_rnks * 5.154579e-04) %>%
+  get_labels(baseline) %>%
+  arrange(desc(imp)) %>%
+  head(20) %>%
+  ggplot(aes(x = reorder(label %>% str_wrap(40), imp), y = imp)) +
+    geom_col() + 
+    theme(axis.text.x = element_text(angle = 90)) +
+    labs(x = "Variable", y = "Importance") + 
+    geom_point(aes(x = reorder(label %>% str_wrap(40), imp), y = std_std_rnks)) +
+    scale_y_continuous(
+    "Variable importance",
+    sec.axis = sec_axis(~ . / 5.154579e-04, name = "Ranking standard deviation")
   )
 
-tau.hat = predict(cf.raw)$predictions
-morocco$tau <- tau.hat
-
-qplot(x=tau.hat) + xlab("Estimated individual treatment effect") +
-  geom_vline(xintercept = 0)
-ggsave('tauhat.png')
+ggsave('importances.png')
 ```
+
+```{r}
+school_time_use <- data.frame(
+  all_vars$predictions,
+  big_covars$c1_3_27_1
+)
+
+names(school_time_use) <- c("Treatment 1", "Treatment 2", "Treatment 3", "Time-use")
+
+school_time_use %>%
+  mutate(Activity = car::recode(`Time-use`,
+                                "
+                                11:19 = 'Personal care';
+                                20:29 = 'Education';
+                                30:59 = 'Domestic work';
+                                60:79 = 'Non-domestic work';
+                                80:89 = 'Leisure';
+                                else = NA
+                                "
+                                )) %>%
+  select(-`Time-use`) %>%
+  gather(key = "Treatment", value = "Prediction", -Activity) %>%
+  na.omit() %>%
+  group_by(Activity, Treatment) %>%
+  dplyr::summarise(Prediction = mean(Prediction)) %>%
+  ggplot(aes(x = Activity, y = Prediction, fill = Treatment)) +
+    geom_col(position = "dodge") +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+```{r}
+randomised_cf <-  multi_arm_causal_forest (big_covars %>% map_df(sample), morocco2$maths_results, morocco2$group %>% as.factor(),
+  Y.hat = all_vars$Y.hat, W.hat = all_vars$W.hat,
+  num.trees = 10000,
+  clusters = morocco2$hhid,
+  seed = 20
+  )
+```
+
+
+```{r}
+data.frame(name = names(big_covars), imp = variable_importance(all_vars),
+           rand_imp = variable_importance(randomised_cf),
+           first_letter = names(big_covars) %>% str_sub(start = 1, end = 1)) %>%
+  filter(str_detect(name, "^[:lower:][:digit:]")) %>%
+  group_by(first_letter) %>%
+  dplyr::summarise(
+    count = n(),
+    total_importance = sum(imp),
+    rand_importance = sum(rand_imp)
+  ) %>%
+  mutate(
+    portion_group = count / sum(count),
+    total_importance = total_importance / sum(total_importance)
+  ) %>%
+  select(-count) %>%
+  gather(key = "Measure", value = "Portion", -first_letter) %>%
+  ggplot(aes(x = reorder(first_letter, Portion), y = Portion, fill = Measure)) +
+    geom_col(position = "dodge")
+
+ggsave('modules.png')
+```
+
+
+
+## Manual selection
+
+```{r}
+X_vars <- morocco %>% select(-any_drops, -group, - group1, - group_tvn, -any_drops_n, -maths_results, -maths_results_s, -hhid) %>% names()
+```
+
+
+```{r}
+indiv_treat = multi_arm_causal_forest (
+  big_covars,
+  morocco$maths_results, morocco$group1 %>% as.factor(),
+  Y.hat = NULL , W.hat = NULL,
+  num.trees = 10000,
+  clusters = morocco$hhid %>% as.factor()
+  )
+
+comprehension_model <- multi_arm_causal_forest (
+  morocco %>% select(-hhid, maths_results),
+  morocco$maths_results, morocco$group1 %>% as.factor(),
+  Y.hat = indiv_treat$Y.hat , W.hat = indiv_treat$Y.hat,
+  num.trees = 10000,
+  clusters = morocco$hhid %>% as.factor()
+  )
+
+write_rds(indiv_treat, 'indiv_treat.rds')
+```
+
 
 ```{r}
 # code adapted from Athey et al. (2019)
-covars <- morocco2 %>% select(-any_drops, -group_cond, -hhid, age) %>% select_if(~ !all(is.na(.)))
+# covars <- morocco2 %>% select(-any_drops, -group_cond, -hhid, age) %>% select_if(~ !all(is.na(.)))
 
-cf.complete = causal_forest (covars, morocco2$any_drops, morocco2$group_cond %>% as.numeric(),
-  Y.hat = NULL , W.hat = NULL,
-  num.trees = 1000,
-  clusters = morocco2$hhid
-  )
-
-tau.hat = predict(cf.complete)$predictions
-morocco2$tau <- tau.hat
-
-qplot(x=tau.hat) + xlab("Estimated individual treatment effect") +
-  geom_vline(xintercept = 0)
-ggsave('tauhat2.png')
-```
-ATE difference
-```{r}
-average_treatment_effect(cf.raw)
-average_treatment_effect(cf.complete)
-```
-```{r}
-names(covars) <- ifelse(names(covars) %in% row.names(baseline_guide), 
-                        paste0(names(covars), baseline_guide[names(covars), "Dataset Label"]),
-                        names(covars)
+names(big_covars) <- ifelse(names(big_covars) %in% row.names(baseline_guide), 
+                        paste0(names(big_covars), baseline_guide[names(big_covars), "Dataset Label"]),
+                        names(big_covars)
                         )
 ```
 
+
 ```{r}
-data.frame(name = names(covars) %>% str_wrap(40), imp = variable_importance(cf.complete)) %>%
+data.frame(name = X_vars %>% str_wrap(40), imp = variable_importance(indiv_treat)) %>%
   arrange(desc(imp)) %>% head(20) %>%
   ggplot(aes(x = reorder(name, imp), y = imp)) +
     geom_col() + 
     theme(axis.text.x = element_text(angle = 90))
+
+ggsave('indiv_importance.png')
+```
+
+
+## Plot across values
+
+```{r}
+source('plot_het.R')
+het_plots <- multi_outcome_plots(morocco[X_vars], indiv_treat$predictions, variable_importance(indiv_treat))
+
+for (i in 1:length(het_plots)) {
+  for (j in 1:length(het_plots[[i]])) {
+    ggsave(paste0("results/varplot_", i, "-", j, ".png"), plot = het_plots[[i]][[j]], width = 4, height = 3)
+  }
+}
 ```
 
 ```{r}
-data.frame(name = names(morocco[X_vars]), imp = variable_importance(cf.raw)) %>%
-  arrange(desc(imp)) %>%
-  ggplot(aes(x = reorder(name, imp), y = imp)) +
-    geom_col() + 
-    theme(axis.text.x = element_text(angle = 90))
+var_comparisons <- map(morocco[X_vars], function(variable) {
+  map(1: ncol(indiv_treat$predictions), function(treatment) {
+    selector <- ifelse((variable %>% na.omit() %>% unique() %>% length()) == 2, max(variable, na.rm = T), median(variable, na.rm = T))
+    list(
+      low = average_treatment_effect(indiv_treat, subset = variable > selector),
+      high = average_treatment_effect(indiv_treat, subset = variable <= selector)
+    )
+  })
+})
 ```
 
 
+
 # Refutation tests
+f
+
+# Export data for MOPoL
+
+```{r}
+
+```
 

@@ -17,12 +17,12 @@ library(stargazer)
 
 
 ```{r}
-maths <- read_dta("LCT Morroco\\cct_aser_an.dta")
-baseline <- read_dta("LCT Morroco\\cct_baseline_an.dta")
-endline <- read_dta("LCT Morroco\\cct_endline_an.dta")
-school_baseline <- read_dta("LCT Morroco\\cct_preliminary_survey_an.dta")
-dropout <- read_dta('LCT Morroco\\cct_school_visits_an.dta')
-admin_data <- read_dta('LCT Morroco\\cct_tayssir_admin_data_an.dta')
+maths <- read_dta("LCT Morroco/cct_aser_an.dta")
+baseline <- read_dta("LCT Morroco/cct_baseline_an.dta")
+endline <- read_dta("LCT Morroco/cct_endline_an.dta")
+school_baseline <- read_dta("LCT Morroco/cct_preliminary_survey_an.dta")
+dropout <- read_dta('LCT Morroco/cct_school_visits_an.dta')
+admin_data <- read_dta('LCT Morroco/cct_tayssir_admin_data_an.dta')
 ```
 
 ```{r}
@@ -46,10 +46,12 @@ joined <- baseline %>%
     vars(-ends_with(".y"))
   )
 
+#### WTF IS THIS, FIX!!!
 baseline %<>%
   mutate(schoolunitid = factor(schoolunitid),
-         group1 = car::recode(group, "0 = NA; 1=1; 2:50 = 0"),
-         group2 = car::recode(group, "0 = NA; 1=NA "),
+         group_tvn = group,
+         group1 = car::recode(group, "0 = NA;"),
+         group = car::recode(group, "0 = NA; 1=1; 2:50 = 0")
          )
 ```
 
@@ -70,6 +72,8 @@ temp <- intermediate %>%
   spread(question, value) %>%
   filter(a3 == 1) %>%
   select(hhid, a4, a13, a15)
+
+
 ```
 
 ```{r}
@@ -103,12 +107,21 @@ baseline$monthly_spending <- rowSums(expenditure, na.rm = TRUE) %>% log()
 
 ```
 
+
+```{r}
+baseline$school_spending <- baseline %>%
+  select(matches('^e[[:digit:]]')) %>%
+  select(-ends_with('num')) %>%
+  mutate_all(~.x %>% as.numeric %>% na_if(-99)) %>%
+  rowSums(na.rm = T)
+```
+
 ```{r}
 num_kids <- baseline %>%
   select(hhid, matches("^d1_[0-9]{1,2}")) %>%
   gather(-hhid, key = "question", value = "value") %>%
   group_by(hhid) %>%
-  summarise(est_num_kids = sum(value == 1, na.rm = T))
+  dplyr::summarise(est_num_kids = sum(value == 1, na.rm = T))
 
 ```
 
@@ -137,19 +150,18 @@ assets[assets==-99]<-NA
 ```
 
 ```{r}
-maths_results <- rowSums(maths[c('t6', 't5_1', 't4_1', 't3_1')])
+maths %<>% 
+  mutate(maths_results = -(1-as.numeric(t6)) + (as.numeric(t5_2) / 2) + (as.numeric(t4_2) / 5) + (as.numeric(t3_2) / 5))
 ```
 
 
 ```{r}
-joined1 <- baseline[c('hhid', 'group', 'monthly_spending')] %>%
+joined1 <- baseline[c('hhid', 'group', 'monthly_spending', 'group1', 'group_tvn', 'school_spending')] %>%
   left_join(num_kids, by = "hhid") %>%
   left_join(temp, by = "hhid") %>%
   filter(!duplicated(hhid))
 
 # joined1$PCA <- pca_results@scores %>% c()
-
-maths$maths_results <- rowSums(maths[c('t6', 't5_1', 't4_1', 't3_1')])
 
 joined1 %<>%
   left_join(maths, by = "hhid")
@@ -168,18 +180,38 @@ joined1 %<>%
 #   left_join(assets, by = "hhid")
 ```
 
-
-
 ```{r}
-# Get the valid baseline predictors
-joined
+joined2 <- baseline %>%
+  select(a1_1:l7, hhid, group) %>%
+  left_join(num_kids, by = "hhid") %>%
+  left_join(temp, by = "hhid") %>%
+  filter(!duplicated(hhid))
 
+# joined2$PCA <- pca_results@scores %>% c()
+
+joined2 %<>%
+  left_join(maths %>% select(maths_results,hhid), by = "hhid")
+
+# Add endline ID to be able to join to maths data
+# joined2 %<>%
+#   dplyr::inner_join(endline[c('hhid', 'hhid_endline')], by = 'hhid', suffix = c("", ".y")) %>%
+#   inner_join(admin_data[c('hhid_endline', 'stud_id_tayssir', 'datenaiseleve', 'genre_el')], by = 'hhid_endline', suffix = c("", ".y")) %>%
+#   inner_join(dropout[c('stud_id_tayssir', 'any_drops')], by = "stud_id_tayssir", suffix = c("", ".y")) %>%
+#   select_at(
+#     vars(-ends_with(".y"))
+#   )
+
+
+# joined2 <- joined2 %>%
+#   left_join(assets, by = "hhid")
+
+write_rds(joined2, 'morocco2.rds')
 ```
 
 ```{r}
-covariates <- c('hhh_gender', 'hhh_age', 'monthly_spending', 'any_drops', 'hhh_literacy', 'age', 'gender', 'hhid', 'group', 'benef')
+covariates <- c('hhh_gender', 'hhh_age', 'monthly_spending', 'any_drops', 'hhh_literacy', 'age', 'gender', 'hhid', 'group', 'benef', 'group1', 'group_tvn', 'est_num_kids', 'maths_results', "school_spending")
 
-X_vars <- c('hhh_gender', 'hhh_age', 'monthly_spending', 'hhh_literacy', 'age', 'gender', 'benef')
+X_vars <- c('hhh_gender', 'hhh_age', 'monthly_spending', 'hhh_literacy', 'age', 'gender', 'benef', 'est_num_kids', "school_spending")
 
 joined1 %<>%
     dplyr::rename(hhh_age = a13,
@@ -205,7 +237,7 @@ joined1 <- joined1[covariates]
   mutate(any_drops = (any_drops - 1) * -1)
  
 joined_num[joined_num < 0] <- NA
-joined_num <- joined_num[complete.cases(joined_num),]
+joined_num <- joined_num[complete.cases(joined_num[c('maths_results', 'group1')]),]
 
 X <- joined_num[X_vars]
 ```
@@ -224,7 +256,7 @@ Mention we are not using two-stage selection or other pre-processing, instead re
 
 
 
-cf.raw = causal_forest (X, joined_num$any_drops, joined_num$group1 %>% as.numeric(),
+cf.raw = causal_forest (X, joined_num$any_drops, joined_num$group %>% as.numeric(),
   Y.hat = NULL , W.hat = 0.69 ,
   
   clusters = joined_num$hhid
@@ -275,9 +307,9 @@ ggplot(data = NULL, aes(x = joined_num$hhh_age, y = tau.hat)) +
 ```
 
 ```{r}
-ggplot(data = NULL, aes(x = joined_num$est_num_kids, y = tau.hat)) +
-  geom_jitter() + 
-  geom_smooth(method="gam", formula = y ~ s(x, bs = "cs", k=5))
+# ggplot(data = NULL, aes(x = joined_num$est_num_kids, y = tau.hat)) +
+#   geom_jitter() + 
+#   geom_smooth(method="gam", formula = y ~ s(x, bs = "cs", k=5))
 ```
 
 ```{r}
@@ -326,8 +358,8 @@ t_results
 ```{r}
 joined_num %>%
   mutate(old_young = hhh_age >= median(hhh_age)) %>%
-  group_by(old_young, group1) %>%
-  summarise(group_mean = mean(any_drops))
+  group_by(old_young, group) %>%
+  dplyr::summarise(group_mean = mean(any_drops))
 ```
 
 ```{r}
@@ -342,8 +374,8 @@ ggplot(data = NULL, aes(x = joined_num$age[eligible], y = tau.hat[eligible])) +
 
 ```{r}
 joined_num %>%
-  group_by(gender, group1) %>%
-  summarise(group_mean = mean(any_drops))
+  group_by(gender, group) %>%
+  dplyr::summarise(group_mean = mean(any_drops))
 ```
 
 ```{r}
@@ -444,14 +476,14 @@ create_cowplot(X_vars) %>% save_plot(filename = 'cowplot.png', base_height = 20,
 
 
 ```{r}
-t.test(joined_num[joined_num$group1 == 1, 'any_drops'], joined_num[joined_num$group1 == 0, 'any_drops'])
+t.test(joined_num[joined_num$group == 1, 'any_drops'], joined_num[joined_num$group == 0, 'any_drops'])
 ```
 
 ```{r}
-model1 <- lm(data = joined_num[eligible,], any_drops ~ age + hhh_age + poly(monthly_spending, 5) + group1 + age*group1 + hhh_age*group1 + poly(monthly_spending, 5)*group1, family=binomial(link='logit'))
+model1 <- lm(data = joined_num[eligible,], any_drops ~ age + hhh_age + poly(monthly_spending, 5) + group + age*group + hhh_age*group + poly(monthly_spending, 5)*group, family=binomial(link='logit'))
 
 
-model2 <- lm(data = joined_num[eligible,], any_drops ~ age + hhh_age + monthly_spending + group1 + age*group1 + hhh_age*group1 + monthly_spending*group1, family=binomial(link='logit'))
+model2 <- lm(data = joined_num[eligible,], any_drops ~ age + hhh_age + monthly_spending + group + age*group + hhh_age*group + monthly_spending*group, family=binomial(link='logit'))
 
 stargazer(model1, model2, type = "html", out = "reg_out.htm")
 ```

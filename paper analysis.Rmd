@@ -6,7 +6,6 @@ output: html_notebook
 ```{r}
 library(tidyverse)
 library(grf)
-library(plyr)
 library(policytree)
 library(mlr)
 library(cowplot)
@@ -18,14 +17,15 @@ morocco2 <- read_rds('morocco2.rds')
 ```{r}
 # Join on maths
 
-maths$maths_results <- rowSums(maths[c('t6', 't5_1', 't4_1', 't3_1')])
+maths %<>% 
+  mutate(maths_results = -(1-as.numeric(t6)) + (as.numeric(t5_2) / 2) + (as.numeric(t4_2) / 5) + (as.numeric(t3_2) / 5))
 
 two_outcome <- morocco %>%
   mutate(hhid = as.character(hhid)) %>%
   inner_join(maths %>% select(hhid, maths_results), by = "hhid") %>%
-  mutate(maths_results_s = scale(maths_results) %>% as.numeric(),
-         any_drops_n = scale(as.numeric(any_drops)) %>% as.numeric(),
-         female = gender == 'F'
+  mutate(any_drops_n = scale(as.numeric(any_drops)) %>% as.numeric(),
+         female = gender == 'F',
+         gender = as.numeric(gender)
          ) %>%
   left_join(baseline %>% select(hhid)) %>%
   mutate(group = as_factor(group)) %>%
@@ -33,6 +33,7 @@ two_outcome <- morocco %>%
          hhid = as.factor(hhid)) %>%
   na.omit()
 
+write_rds(two_outcome, "two_outcome.rds")
 ```
 
 ```{r}
