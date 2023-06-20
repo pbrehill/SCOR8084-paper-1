@@ -178,7 +178,11 @@ joined %<>%
 
 ```{r}
 joined %<>%
-  left_join(understanding %>% select(ksm_c1_:ksm_c6_, hhid), by = "hhid")
+  left_join(understanding %>% select(ksm_c1_:ksm_c6_, hhid), by = "hhid") %>%
+  mutate(no_understanding)
+
+joined %<>%
+  mutate(at_leisure = (c1_3_21_1 %>% as.character %>% substr(1,1)) %in% c('2','8'))
 ```
 
 ```{r}
