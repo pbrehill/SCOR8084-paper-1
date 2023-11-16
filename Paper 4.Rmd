@@ -15,28 +15,9 @@ morocco <- read_rds('morocco.rds') %>%
   filter(group > 1) %>%
   mutate(group = group -1)
 
-morocco %<>% mutate(lack_program_knowledge = ksm_c4_1 == 6)
+big_covars <- morocco %>% select(-hhid, -maths_results, -group, -program_knowledge, -schoolid)
 
-big_covars <- morocco %>% select(-hhid, -maths_results, -group, -ksm_c1_:-ksm_c6_, -lack_program_knowledge)
-
-X_vars <- c('hhh_gender', 'hhh_age', 'monthly_spending', 'hhh_literacy', 'age', 'gender', 'benef', 'school_spending', 'at_leisure', 'lack_program_knowledge')
-```
-
-
-```{r}
-attributes(joined$c1_3_21_1)$labels %>% as.data.frame()
-
-morocco %>%
-  mutate(activity = c1_3_21_1 %>% factor(levels = attributes(joined$c1_3_21_1)$labels, labels = names(attributes(joined$c1_3_21_1)$labels))) %>%
-  bind_cols(indiv_treat$predictions) %>%
-  group_by(activity) %>%
-  summarise(
-    c1 = mean(`...2880`, na.rm = T),
-    c2 = mean(`...2881`, na.rm = T),
-    c3 = mean(`...2882`, na.rm = T),
-    first_digit = mean(c1_3_21_1, na.rm = T) %>% as.character() %>% substr(1,1),
-    n1 = n()
-    ) %>% write_csv('timeuse.csv')
+X_vars <- c('hhh_gender', 'hhh_age', 'monthly_spending', 'hhh_literacy', 'age', 'gender', 'benef', 'school_spending', 'at_leisure', 'program_knowledge')
 ```
 
 ```{r}
@@ -59,24 +40,19 @@ set.seed(1)
 ```{r}
 indiv_treat <- multi_arm_causal_forest (big_covars, morocco$maths_results, morocco$group %>% as.factor(),
   Y.hat = NULL , W.hat = NULL,
-  num.trees = 10000
+  num.trees = 10000,
+  clusters = morocco$schoolid
   )
 
 comprehension <- multi_arm_causal_forest (select(morocco, -hhid, -maths_results, -group), morocco$maths_results, morocco$group %>% as.factor(),
   Y.hat = indiv_treat$Y.hat, W.hat = indiv_treat$W.hat,
-  num.trees = 10000
+  num.trees = 10000,
+  clusters = morocco$schoolid
   )
 
 write_rds(indiv_treat, 'indiv_treat.rds')
 ```
 
-```{r}
-comparison <- multi_arm_causal_forest (big_covars[X_vars], morocco$maths_results, morocco$group %>% as.factor(),
-  Y.hat = NULL , W.hat = NULL,
-  num.trees = 10000
-  )
-
-```
 
 # Figure 1
 
@@ -100,22 +76,22 @@ save_plot('contrasts.png', cowplot::plot_grid(plotlist = indiv_plots), base_heig
 ```
 
 ```{r}
-indiv_ate <- average_treatment_effect(comparison)
-indiv_plots <- map(1:length(indiv_ate$contrast), function(x) {
-  ate_est <- indiv_ate[x,][c("estimate", "std.err")] %>% unlist()
-  preds <- indiv_treat$predictions[,x]
-  qplot(x = preds) + 
-    geom_vline(xintercept = 0, linetype = "dashed") +
-    geom_vline(xintercept = ate_est['estimate'], color = "blue") +
-    scale_y_continuous(limits = c(0, 600)) +
-    annotate("rect", 
-             xmin = ate_est['estimate'] - (1.96 * ate_est['std.err']), 
-             xmax = ate_est['estimate'] + (1.96 * ate_est['std.err']), ymin = 0, ymax = Inf,
-             alpha = .1,fill = "blue") +
-    ggtitle("Contrast ", paste0(indiv_ate$contrast[x])) + 
-    labs(x = "Predictions", y = "Counts")
-})
-save_plot('contrasts1.png', cowplot::plot_grid(plotlist = indiv_plots), base_height = 5)
+# indiv_ate <- average_treatment_effect(comparison)
+# indiv_plots <- map(1:length(indiv_ate$contrast), function(x) {
+#   ate_est <- indiv_ate[x,][c("estimate", "std.err")] %>% unlist()
+#   preds <- indiv_treat$predictions[,x]
+#   qplot(x = preds) + 
+#     geom_vline(xintercept = 0, linetype = "dashed") +
+#     geom_vline(xintercept = ate_est['estimate'], color = "blue") +
+#     scale_y_continuous(limits = c(0, 600)) +
+#     annotate("rect", 
+#              xmin = ate_est['estimate'] - (1.96 * ate_est['std.err']), 
+#              xmax = ate_est['estimate'] + (1.96 * ate_est['std.err']), ymin = 0, ymax = Inf,
+#              alpha = .1,fill = "blue") +
+#     ggtitle("Contrast ", paste0(indiv_ate$contrast[x])) + 
+#     labs(x = "Predictions", y = "Counts")
+# })
+# save_plot('contrasts1.png', cowplot::plot_grid(plotlist = indiv_plots), base_height = 5)
 ```
 ## Table
 
@@ -182,8 +158,8 @@ imp_var[[1]] %>%
 
 
 ```{r}
-data.frame(name = names(big_covars), imp = variable_importance(all_vars)) %>%
-  left_join(select(imp_var$stats, name, std_rnks)) %>%
+data.frame(name = names(big_covars), imp = variable_importance(indiv_treat)) %>%
+  left_join(select(imp_var$stats, names, std_rnks), by = c("name"= "names")) %>%
   mutate(std_std_rnks = std_rnks * 5.154579e-04) %>%
   get_labels(baseline) %>%
   arrange(desc(imp)) %>%
@@ -203,7 +179,7 @@ ggsave('importances.png')
 
 ```{r}
 school_time_use <- data.frame(
-  all_vars$predictions,
+  indiv_treat$predictions,
   big_covars$c1_3_27_1
 )
 
@@ -231,37 +207,28 @@ school_time_use %>%
 
 ```
 
-```{r}
-randomised_cf <-  multi_arm_causal_forest (big_covars %>% map_df(sample), morocco2$maths_results, morocco2$group %>% as.factor(),
-  Y.hat = all_vars$Y.hat, W.hat = all_vars$W.hat,
-  num.trees = 10000,
-  clusters = morocco2$hhid,
-  seed = 20
-  )
-```
-
 
 ```{r}
-data.frame(name = names(big_covars), imp = variable_importance(all_vars),
-           rand_imp = variable_importance(randomised_cf),
-           first_letter = names(big_covars) %>% str_sub(start = 1, end = 1)) %>%
-  filter(str_detect(name, "^[:lower:][:digit:]")) %>%
-  group_by(first_letter) %>%
-  dplyr::summarise(
-    count = n(),
-    total_importance = sum(imp),
-    rand_importance = sum(rand_imp)
-  ) %>%
-  mutate(
-    portion_group = count / sum(count),
-    total_importance = total_importance / sum(total_importance)
-  ) %>%
-  select(-count) %>%
-  gather(key = "Measure", value = "Portion", -first_letter) %>%
-  ggplot(aes(x = reorder(first_letter, Portion), y = Portion, fill = Measure)) +
-    geom_col(position = "dodge")
-
-ggsave('modules.png')
+# data.frame(name = names(big_covars), imp = variable_importance(all_vars),
+#            rand_imp = variable_importance(randomised_cf),
+#            first_letter = names(big_covars) %>% str_sub(start = 1, end = 1)) %>%
+#   filter(str_detect(name, "^[:lower:][:digit:]")) %>%
+#   group_by(first_letter) %>%
+#   dplyr::summarise(
+#     count = n(),
+#     total_importance = sum(imp),
+#     rand_importance = sum(rand_imp)
+#   ) %>%
+#   mutate(
+#     portion_group = count / sum(count),
+#     total_importance = total_importance / sum(total_importance)
+#   ) %>%
+#   select(-count) %>%
+#   gather(key = "Measure", value = "Portion", -first_letter) %>%
+#   ggplot(aes(x = reorder(first_letter, Portion), y = Portion, fill = Measure)) +
+#     geom_col(position = "dodge")
+# 
+# ggsave('modules.png')
 ```
 
 
@@ -269,25 +236,25 @@ ggsave('modules.png')
 ## Manual selection
 
 ```{r}
-X_vars <- morocco %>% select(-any_drops, -group, - group1, - group_tvn, -any_drops_n, -maths_results, -maths_results_s, -hhid) %>% names()
+X_vars <- morocco %>% select(-group, -maths_results, -hhid) %>% names()
 ```
 
 
 ```{r}
 indiv_treat = multi_arm_causal_forest (
   big_covars,
-  morocco$maths_results, morocco$group1 %>% as.factor(),
+  morocco$maths_results, morocco$group %>% as.factor(),
   Y.hat = NULL , W.hat = NULL,
   num.trees = 10000,
-  clusters = morocco$hhid %>% as.factor()
+  clusters = morocco$schoolid %>% as.factor()
   )
 
 comprehension_model <- multi_arm_causal_forest (
   morocco %>% select(-hhid, maths_results),
-  morocco$maths_results, morocco$group1 %>% as.factor(),
-  Y.hat = indiv_treat$Y.hat , W.hat = indiv_treat$Y.hat,
+  morocco$maths_results, morocco$group %>% as.factor(),
+  Y.hat = indiv_treat$Y.hat , W.hat = indiv_treat$W.hat,
   num.trees = 10000,
-  clusters = morocco$hhid %>% as.factor()
+  clusters = morocco$schoolid %>% as.factor()
   )
 
 write_rds(indiv_treat, 'indiv_treat.rds')
@@ -306,7 +273,7 @@ names(big_covars) <- ifelse(names(big_covars) %in% row.names(baseline_guide),
 
 
 ```{r}
-data.frame(name = X_vars %>% str_wrap(40), imp = variable_importance(indiv_treat)) %>%
+data.frame(name = big_covars %>% names() %>% str_wrap(40), imp = variable_importance(indiv_treat)) %>%
   arrange(desc(imp)) %>% head(20) %>%
   ggplot(aes(x = reorder(name, imp), y = imp)) +
     geom_col() + 
@@ -320,7 +287,8 @@ ggsave('indiv_importance.png')
 
 ```{r}
 source('plot_het.R')
-het_plots <- multi_outcome_plots(morocco[X_vars], indiv_treat$predictions)
+library(cowplot)
+het_plots <- multi_outcome_plots(morocco[X_vars], indiv_treat$predictions, average_treatment_effect(indiv_treat)$estimate)
 
 for (i in 1:length(het_plots)) {
   for (j in 1:length(het_plots[[i]])) {
@@ -363,7 +331,7 @@ het_plots %>%
 ```
 
 ```{r}
-var_comparisons <- map(morocco[X_vars], function(variable) {
+var_comparisons <- map(morocco[big_covars %>% names()], function(variable) {
   map(1: ncol(indiv_treat$predictions), function(treatment) {
     selector <- ifelse((variable %>% na.omit() %>% unique() %>% length()) == 2, max(variable, na.rm = T), median(variable, na.rm = T))
     list(
@@ -375,7 +343,7 @@ var_comparisons <- map(morocco[X_vars], function(variable) {
 ```
 
 ```{r}
-test_det(morocco %>% select(c(X_vars), lack_program_knowledge) %>% bind_rows(.id = "contrast")
+test_det(morocco %>% select(c(X_vars), lack_program_knowledge), indiv_treat$predictions) %>% bind_rows(.id = "contrast") %>% write_csv('t_tests.csv')
 ```
 
 # Best linear projection
@@ -384,18 +352,50 @@ test_det(morocco %>% select(c(X_vars), lack_program_knowledge) %>% bind_rows(.id
 binary_selector <- map(2:4, function(x) {
   selector <- indiv_treat$W.orig %in% c(1, x)
 })
-
-blps <- binary_forests(indiv_treat) %>%
-  map2(binary_selector, ~best_linear_projection(.x, .x$X.orig[c('hhh_gender', 'hhh_age', 'monthly_spending', 'hhh_literacy', 'age', 'gender', 'benef', 'school_spending')]))
+# 
+# blps <- binary_forests(indiv_treat) %>%
+#   map2(binary_selector, ~best_linear_projection(.x, .x$X.orig[c('hhh_gender', 'hhh_age', 'monthly_spending', 'hhh_literacy', 'age', 'gender', 'benef', 'school_spending')]))
 ```
-
-
-# Refutation tests
-f
-
-# Export data for MOPoL
+# Maths results
 
 ```{r}
+morocco %>% ggplot(aes(x = maths_results)) + geom_histogram(binwidth = 0.5) +
+  theme_light() +
+  labs(x = "Maths results (out of 4)", y = "Count")
 
+ggsave("maths_results.png")
+```
+
+```{r}
+pct_maths <- transmute(joined %>% filter(hhid %in% morocco$hhid),  division = (2-as.numeric(t6)), subtraction = (as.numeric(t5_2) / 2), num_recog = (as.numeric(t4_2) / 5), digit_recog = (as.numeric(t3_2) / 5)) %>%
+  map_dbl(mean)
+
+var_maths <- transmute(joined %>% filter(hhid %in% morocco$hhid),  division = (2-as.numeric(t6)), subtraction = (as.numeric(t5_2) / 2), num_recog = (as.numeric(t4_2) / 5), digit_recog = (as.numeric(t3_2) / 5)) %>%
+  map_dbl(sd)
+
+pct_maths %>%as.data.frame() %>% write.csv('maths_scores.csv')
+```
+
+# Time use
+
+```{r}
+assert_data <- morocco %>%
+  mutate(activity = c1_3_21_1 %>% factor(levels = attributes(joined$c1_3_21_1)$labels, labels = names(attributes(joined$c1_3_21_1)$labels))) %>%
+  bind_cols(indiv_treat$predictions) %>%
+  select(starts_with("..."))
+
+testit::assert(ncol(assert_data) == 3)
+
+attributes(joined$c1_3_21_1)$labels %>% as.data.frame()
+
+morocco %>%
+  mutate(activity = c1_3_21_1 %>% factor(levels = attributes(joined$c1_3_21_1)$labels, labels = names(attributes(joined$c1_3_21_1)$labels))) %>%
+  bind_cols(indiv_treat$predictions) %>%
+  group_by(activity) %>%
+  summarise(
+    across(starts_with("..."), ~mean(., na.rm = TRUE), .names = "mean_{.col}"),
+    first_digit = mean(c1_3_21_1, na.rm = T) %>% as.character() %>% substr(1,1),
+    n1 = n()
+  ) %>% write_csv('timeuse.csv')
 ```
 
