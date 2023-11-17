@@ -144,19 +144,36 @@ join_on_names <- function(baseline, endline, maths) {
 }
 
 
-get_vars_by_regex <- function(df, selector, num_selector, person_num) {
-  df[paste0(person_num, "join")] <- df[person_num]
+gather_w_labels <- function(data, key = "key", value = "value") {
+  labels <- data %>% 
+    labelled::get_variable_labels() %>%
+    unlist()
+  
+  gathered_data <- data %>%
+    gather(key, value, -hhid)
+  
+  gathered_data$label <- labels[gathered_data$key]
+  gathered_data
+}
+
+
+get_vars_by_regex <- function(df, selector, num_selector, person_num, suffix = "_self") {
+  df[paste0(person_num, "join")] <- df[person_num] %>% 
+    pull() %>%
+    as.numeric()
   
   df %>%
     select(hhid, matches(selector)) %>%
-    gather("name", "value", -hhid) %>%
+    gather("name", "value", -hhid)%>%
     transmute(value = value, 
               person = str_extract(name, num_selector) %>% str_extract("[:digit:]+") %>% as.numeric(),
               variable = str_replace(name, num_selector, ""),
-              variable = paste0(variable, "_self"),
+              variable = paste0(variable, suffix),
               hhid = hhid
               ) %>%
     pivot_wider(names_from = variable, values_from = value) %>%
     right_join(df, by = c("hhid", "person" = paste0(person_num, "join")))
 }
+
+
 

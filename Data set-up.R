@@ -19,7 +19,7 @@ maths <- read_dta("LCT Morroco/cct_aser_an.dta")
 baseline <- read_dta("LCT Morroco/cct_baseline_an.dta")
 endline <- read_dta("LCT Morroco/cct_endline_an.dta")
 school_baseline <- read_dta("LCT Morroco/cct_preliminary_survey_an.dta")
-dropout <- read_dta('LCT Morroco/cct_school_visits_an.dta')
+# dropout <- read_dta('LCT Morroco/cct_school_visits_an.dta')
 admin_data <- read_dta('LCT Morroco/cct_tayssir_admin_data_an.dta')
 knowledge <- read_dta("LCT Morroco/cct_knowledge_households_year1_an.dta")
 
@@ -45,13 +45,16 @@ selected <- baseline %>%
   left_join(maths_link, by = c("hhid", "Name")) %>%
   filter(Name == id_enf_test) %>%
   select(hhid, child_num.x, Name) %>%
-  mutate(child_num.x = as.numeric(child_num.x))
+  mutate(child_num.x = as.numeric(child_num.x)) %>%
+  group_by(hhid) %>%
+  slice(1) %>%
+  ungroup()
 
 names(selected) <- c("hhid", "child_num", "member_id")
 baseline1 <- left_join(selected, baseline, by = "hhid")
 
 # Get section a self
-test1 <- baseline1 %>%
+baseline <- baseline1 %>%
   get_vars_by_regex("^a", "_[:digit:]+", "member_id") %>%
   get_vars_by_regex("^c[[:digit:]]", "[:digit:]+", "child_num") %>%
   get_vars_by_regex("^d[[:digit:]]", "_[:digit:]+", "child_num") %>%
@@ -63,13 +66,13 @@ test1 <- baseline1 %>%
 
 
 # Dropout outcomes
-dropouts <- dropout %>% 
-  select(ends_with('_c12'))
-
-dropouts1 <- dropouts == 2
-dropouts2 <- rowSums(dropouts1, na.rm = TRUE) # Importantly excluding NAs
-dropouts3 <- dropouts2 > 0
-dropout$any_drops <- dropouts3
+# dropouts <- dropout %>% 
+#   select(ends_with('_c12'))
+# 
+# dropouts1 <- dropouts == 2
+# dropouts2 <- rowSums(dropouts1, na.rm = TRUE) # Importantly excluding NAs
+# dropouts3 <- dropouts2 > 0
+# dropout$any_drops <- dropouts3
 
 joined <- baseline %>%
   # left_join(endline, by = "hhid", suffix = c("", ".y")) %>%
@@ -91,22 +94,24 @@ baseline %<>%
 
 
 # Get hhh variables
-intermediate <- baseline %>%
-  select(hhid, matches("^a[1-9]")) %>%
-  gather(-hhid, key = "question", value = "value") %>%
-  tidyr::separate(question, c("question", "person", "response"), sep = "_") 
-
-temp <- intermediate %>%
-  filter(question == 'a4' |
-           question == 'a13' |
-           (question == 'a15' & response == 1) |
-           (question == 'a3' & is.na(response))
-  ) %>%
-  select(-response) %>%
-  spread(question, value) %>%
-  filter(a3 == 1) %>%
-  select(hhid, a4, a13, a15)
-
+# intermediate <- baseline %>%
+#   select(hhid, matches("^a[1-9]")) %>%
+#   gather(-hhid, key = "question", value = "value") %>%
+#   tidyr::separate(question, c("question", "person", "response"), sep = "_") 
+# 
+# temp <- intermediate %>%
+#   filter(question == 'a4' |
+#            question == 'a13' |
+#            (question == 'a15' & response == 1) |
+#            (question == 'a3' & is.na(response)),
+#             person != "self"
+#   ) %>%
+#   select(-response) %>%
+#   pivot_wider(names_from = question, values_from = value) %>%
+#   # spread(question, value) %>%
+#   filter(a3 == 1) %>%
+#   select(hhid, a4, a13, a15)
+# Get hhh number
 
 
 week_to_month <- function (x) {
@@ -164,13 +169,13 @@ knowledge1 <- knowledge %>%
 
 joined1 <- baseline[c('hhid', 'group', 'group_cond', 'monthly_spending', 'schoolid')] %>%
   left_join(num_kids, by = "hhid") %>%
-  left_join(temp, by = "hhid") %>%
+  # left_join(temp, by = "hhid") %>%
   left_join(knowledge1, by = "hhid") %>%
   filter(!duplicated(hhid))
 
 joined2 <- baseline %>%
   left_join(num_kids, by = "hhid") %>%
-  left_join(temp, by = "hhid") %>%
+  # left_join(temp, by = "hhid") %>%
   left_join(knowledge1, by = "hhid") %>%
   filter(!duplicated(hhid))
 
@@ -194,7 +199,7 @@ joined2 %<>%
 joined1 %<>%
   dplyr::inner_join(endline[c('hhid', 'hhid_endline')], by = 'hhid', suffix = c("", ".y")) %>%
   inner_join(admin_data[c('hhid_endline', 'stud_id_tayssir', 'datenaiseleve', 'genre_el')], by = 'hhid_endline', suffix = c("", ".y")) %>%
-  inner_join(dropout[c('stud_id_tayssir', 'any_drops')], by = "stud_id_tayssir", suffix = c("", ".y")) %>%
+  # inner_join(dropout[c('stud_id_tayssir', 'any_drops')], by = "stud_id_tayssir", suffix = c("", ".y")) %>%
   select_at(
     vars(-ends_with(".y"))
   )
@@ -202,7 +207,7 @@ joined1 %<>%
 joined2 %<>%
   dplyr::inner_join(endline[c('hhid', 'hhid_endline')], by = 'hhid', suffix = c("", ".y")) %>%
   inner_join(admin_data[c('hhid_endline', 'stud_id_tayssir', 'datenaiseleve', 'genre_el')], by = 'hhid_endline', suffix = c("", ".y")) %>%
-  inner_join(dropout[c('stud_id_tayssir', 'any_drops')], by = "stud_id_tayssir", suffix = c("", ".y")) %>%
+  # inner_join(dropout[c('stud_id_tayssir', 'any_drops')], by = "stud_id_tayssir", suffix = c("", ".y")) %>%
   select_at(
     vars(-ends_with(".y"))
   )
@@ -236,20 +241,20 @@ joined2 %<>%
 
 
 joined_num2 <- joined2 %>%
-dplyr::rename(hhh_age = a13,
-              hhh_gender = a4,
-              hhh_literacy = a15,
-              age = datenaiseleve,
-              gender = genre_el) %>%
-  #   mutate(cluster = as.factor(hhid)) %>%
-  mutate(gender = factor(gender),
-         hhid = as.factor(hhid),
-         group = factor(group),
-         benef = factor(benef)
-  ) %>%
-  mutate(age = difftime(as.Date("2010-01-01"), age)) %>%
-  mutate_at(vars(-hhid), as.numeric) %>%
-  mutate(any_drops = (any_drops - 1) * -1)
+# dplyr::rename(hhh_age = a13,
+#               hhh_gender = a4,
+#               hhh_literacy = a15,
+#               age = datenaiseleve,
+#               gender = genre_el) %>%
+#   #   mutate(cluster = as.factor(hhid)) %>%
+#   mutate(gender = factor(gender),
+#          hhid = as.factor(hhid),
+#          group = factor(group),
+#          benef = factor(benef)
+#   ) %>%
+  mutate(benef = as_factor(benef)) %>%
+  mutate_at(vars(-hhid, -schoolunitid), as.numeric) #%>%
+#   # mutate(any_drops = (any_drops - 1) * -1)
 
 joined_num2[joined_num2 < 0] <- NA
 
